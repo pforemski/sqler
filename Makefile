@@ -1,14 +1,11 @@
-CFLAGS=-g -fPIC -lasn -lmysqlclient
-MODULES=common.so query.so
+CFLAGS=-g -fPIC -lasn
+MODULES=mysql.so
 
 default: all
 all: $(MODULES)
 
-common.so: common.c
-	gcc $(CFLAGS) -shared -o common.so common.c
-
-query.so: query.c
-	gcc $(CFLAGS) -shared -o query.so query.c
+mysql.so: mysql.c
+	gcc $(CFLAGS) -lmysqlclient -shared -o mysql.so mysql.c
 
 .PHONY: clean
 clean:
