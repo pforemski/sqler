@@ -18,6 +18,10 @@
 struct sreq {
 	MYSQL *conn;
 	const char *query;
+	enum reply_format {
+		REPLY_VERBOSE = 1,
+		REPLY_COMPACT
+	} repmode;
 
 	/* XXX: these may be NULL */
 	const char *host;
@@ -50,20 +54,29 @@ bool parse_query(struct req *req)
 	struct sreq *sreq = req->prv;
 	const char *s;
 
-	sreq->host = "localhost";
+	if ((s = uth_char(req->mod->cfg, "host")))
+		sreq->host = s;
+	else
+		sreq->host = "localhost";
 
-	s = uth_char(req->query, "user");
-	if (s) {
-		if (asn_match("/^[A-Za-z0-9]+$/", s))
+	if ((s = uth_char(req->mod->cfg, "user"))) {
+		sreq->user = s;
+	} else if ((s = uth_char(req->params, "user"))) {
+		if (asn_match("/^[a-z0-9]+$/", s))
 			sreq->user = s;
 		else
 			return err(-EDBUSER, "Invalid characters in database user", s);
 	}
 
-	sreq->pass = uth_char(req->query, "pass");
+	if ((s = uth_char(req->mod->cfg, "pass"))) {
+		sreq->pass = s;
+	} else if ((s = uth_char(req->params, "pass"))) {
+		sreq->pass = s;
+	}
 
-	s = uth_char(req->query, "db");
-	if (s) {
+	if ((s = uth_char(req->mod->cfg, "db"))) {
+		sreq->db = s;
+	} else if ((s = uth_char(req->params, "db"))) {
 		if (asn_match("/^[A-Za-z0-9_-]+$/", s))
 			sreq->db = s;
 		else
@@ -71,11 +84,19 @@ bool parse_query(struct req *req)
 	}
 
 	/* check if we have a query :) */
-	s = uth_char(req->query, "query");
-	if (!s)
-		return err(-EDBQUERY, "No SQL query given", NULL);
-	else
+	if ((s = uth_char(req->mod->cfg, "query"))) {
 		sreq->query = s;
+	} else if ((s = uth_char(req->params, "query"))) {
+		sreq->query = s;
+	} else {
+		return err(-EDBQUERY, "No SQL query given", NULL);
+	}
+
+	/* check requested reply format */
+	if ((s = uth_char(req->params, "compact")))
+		sreq->repmode = REPLY_COMPACT;
+	else
+		sreq->repmode = REPLY_VERBOSE;
 
 	return true;
 }
@@ -150,21 +171,39 @@ static bool handle(struct req *req, mmatic *mm)
 
 	MYSQL_FIELD *fields;
 	MYSQL_ROW mrow;
-	ut *row, *rows;
+	ut *row, *rows, *columns;
 	unsigned int i, num;
 
 	rows = uth_set_tlist(req->reply, "rows", NULL);
 	fields = mysql_fetch_fields(res);
 	num = mysql_num_fields(res);
 
-	while ((mrow = mysql_fetch_row(res))) {
-		row = utl_add_thash(rows, NULL);
+	if (sreq->repmode == REPLY_VERBOSE) {
+		while ((mrow = mysql_fetch_row(res))) {
+			row = utl_add_thash(rows, NULL);
 
-		for (i = 0; i < num; i++) {
-			if (mrow[i] == NULL)
-				uth_set_null(row, fields[i].name);
-			else
-				uth_set_char(row, fields[i].name, mrow[i]);
+			for (i = 0; i < num; i++) {
+				if (mrow[i] == NULL)
+					uth_set_null(row, fields[i].name);
+				else
+					uth_set_char(row, fields[i].name, mrow[i]);
+			}
+		}
+	} else {
+		ut *columns = uth_set_tlist(req->reply, "columns", NULL);
+
+		for (i = 0; i < num; i++)
+			utl_add_char(columns, fields[i].name);
+
+		while ((mrow = mysql_fetch_row(res))) {
+			row = utl_add_tlist(rows, NULL);
+
+			for (i = 0; i < num; i++) {
+				if (mrow[i] == NULL)
+					utl_add_null(row);
+				else
+					utl_add_char(row, mrow[i]);
+			}
 		}
 	}
 
