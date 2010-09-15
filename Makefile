@@ -1,8 +1,11 @@
 CFLAGS=-g -fPIC -lasn
-MODULES=mysql.so email.so
+MODULES=common.so mysql.so email.so
 
 default: all
 all: $(MODULES)
+
+common.so: common.c
+	gcc $(CFLAGS) -lmysqlclient -shared -o common.so common.c
 
 mysql.so: mysql.c
 	gcc $(CFLAGS) -lmysqlclient -shared -o mysql.so mysql.c
