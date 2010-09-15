@@ -1,5 +1,5 @@
 #include <libasn/lib.h>
-#include <rpcd/rpcd.h>
+#include <rpcd/rpcd_module.h>
 #include <mysql/mysql.h>
 
 /****************************************************/
@@ -41,17 +41,16 @@ struct sreq {
 bool _sqlerr(int code, const char *msg, struct req *req,
 	const char *filename, unsigned int linenum)
 {
-	struct sreq *sreq = req->prv;
-	struct mmatic *mm = req->mm;
+	struct sreq *sreq = uth_ptr(req->prv, "sqler.sreq");
 
 	return err(code, msg,
-		pbt("MySQL errno %u: %s", mysql_errno(sreq->conn), mysql_error(sreq->conn)));
+		mmatic_printf(req, "MySQL errno %u: %s", mysql_errno(sreq->conn), mysql_error(sreq->conn)));
 }
 
 /** Parse db connection params and check if we have a query */
 bool parse_query(struct req *req)
 {
-	struct sreq *sreq = req->prv;
+	struct sreq *sreq = uth_ptr(req->prv, "sqler.sreq");
 	const char *s;
 
 	if ((s = uth_char(req->mod->cfg, "host")))
@@ -104,7 +103,7 @@ bool parse_query(struct req *req)
 /** Open DB connection using user-supplied data */
 bool db_connect(struct req *req)
 {
-	struct sreq *sreq = req->prv;
+	struct sreq *sreq = uth_ptr(req->prv, "sqler.sreq");
 
 	sreq->conn = mysql_init(NULL);
 	if (!sreq->conn)
@@ -122,7 +121,7 @@ bool db_connect(struct req *req)
 
 bool db_disconnect(struct req *req)
 {
-	struct sreq *sreq = req->prv;
+	struct sreq *sreq = uth_ptr(req->prv, "sqler.sreq");
 
 	mysql_close(sreq->conn);
 
@@ -133,14 +132,14 @@ bool db_disconnect(struct req *req)
 /************* Module implementation ****************/
 /****************************************************/
 
-static bool handle(struct req *req, mmatic *mm)
+static bool handle(struct req *req)
 {
 	struct sreq *sreq;
 
 	/******* initialization stuff ********/
 
-	sreq = mmzalloc(sizeof(struct sreq));
-	req->prv = sreq;
+	sreq = mmatic_zalloc(sizeof *sreq, req);
+	uth_set_ptr(req->prv, "sqler.sreq", sreq);
 
 	if (!parse_query(req))
 		return false;
@@ -213,6 +212,6 @@ static bool handle(struct req *req, mmatic *mm)
 }
 
 struct api mysql_api = {
-	.magic = RPCD_MAGIC,
+	.tag = RPCD_TAG,
 	.handle = handle
 };
