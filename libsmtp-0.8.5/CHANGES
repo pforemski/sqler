@@ -1,0 +1,94 @@
+0.8.5 * Bugfix: Missing end-of-line because it was embedded in quotes in mime/comm.c,
+	affecting MIME header generation. Thanks to Vladimir Pycha <Vladimir.Pycha@seznam.cz>
+	for pointing it out!
+      * Various bugs in bitwise OR'ing (rather embarrasing, but I was young and needed the code ;)
+	and an assignment related bug fixed in smtp/libsmtp_connection.c. Thanks again to Vladimir Pycha
+      * A big slew of bugfixes and style updates by Jesus Corrius
+	<jesus@softcatala.org>. Thanks!
+
+0.8.1  Thanks to an anonymous code donator on Berlios:
+       * Added "extern "C" to headers
+       * fixed configure, make, install a bit. Should work better now
+
+
+0.8.0 * Base64 encoding can only send data chunks that are of a size of a
+        multiple of 3, except for the last chunk of a part.
+        Added this to the readme and added a check to the
+        send_part function
+
+      * Date added to headers, thanks to Gleen Salmon for the patch
+
+      * A few SMTP commands ended with a LF only, added CR too. This
+        caused agony for some mailserver like Lotus Domino. ~Thanks to
+        an anonymous berlios member ;)
+
+
+0.7.9 * Base64 and Quoted Printable encoding added
+
+      * Attachment description is included now, too
+
+      * Updated documentation
+
+
+0.7.9b2 * Better examples added (sample generic mail client)
+
+        * Updated documentation
+
+        * Nasty bug in Recipient handling squashed
+
+        * Some memory leaks fixed - probably more around
+
+0.7.9b1 * Base64 and Quoted Printable encoding added
+
+        * Attachment description is included now, too
+
+        * Updated documentation
+
+0.7.8 * Included MIME support. You can choose a MIME type for your body
+
+      * Many new functions concerning MIME support added
+
+      * MIME stuff still not quite reliable. Limitations: can't encode in
+        base64 or quoted printable ATM. Please read doc/MIME.
+
+0.7.7 * This is a total rewrite
+
+      * Everything is better now. Really. :)
+
+      * Project hosted on libsmtp.berlios.de now
+
+      * Docmentation is quite good now, see doc/API
+
+      * Support for multiple recipients
+
+      * Support for Carbon Copy and Blind Carbon Copy
+
+      * I guess its thread-safe now
+
+      * Hooks for TSL there
+ 
+      * The project is under the LGPL now
+
+
+0.7.5 * Cleaned up the code, many small bugs fixed
+    
+    * Integrated code cleanups and optimizations from Sean Reifschneider
+    <jafo@tummy.com>. Thanks!
+    
+    * Tested on NetBSD
+    
+    * Integrated handling of 8 bit data. Now if a server can't handle 8bit
+      data, the function just fails, otherwise it is transmitted correctly.
+      
+    * Functions that check for 8 bit user data added.
+    
+    * Functions that output error strings added (sorta strerr)
+    
+    * Test application added. Sends me a mail. Beware!
+    
+    * Some changes to the tracelog code to don't overwrite the end of
+      the string. But I'm not quite sure this is right, so you better
+      choose larger tracelogs (about 2k should suffice)
+    
+
+0.7 Initial release

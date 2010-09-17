@@ -1,0 +1,184 @@
+
+SESSION SETUP
+=============
+
+What you should setup before you initiate a connection:
+
+struct libsmtp_session_struct *libsmtp_session_initialize ()
+
+Use this function if to initialize the session structure. This will malloc
+memory and initialize the structure's GStrings and GLists. Please be sure to
+clean the initialized struct up with libsmtp_free after you finish using it.
+
+
+int libsmtp_add_recipient (int recipient_type, char *address, struct
+          libsmtp_session_struct *data)
+
+This function will add the address to the recipient of this session.
+recipient_type may be one of LIBSMTP_REC_TO, LIBSMTP_REC_CC,
+LIBSMTP_REC_BCC. This will be added to the linked list internally.
+An address must be of the RFC822-compliant type, eg:
+
+Kevin Read <obsidian@berlios.de>
+"Kevin Read" <obsidian@berlios.de>
+<obsidian@berlios.de>
+obsidian@berlios.de
+
+RFC822 can be found in the doc directory.
+
+Returns: 0 for success, otherwise see libsmtp_errno.
+
+
+int libsmtp_set_environment (char *from, char *subject, unsigned int flags,
+         struct libsmtp_session_struct *data)
+
+With this function you can set additional session parameters for this
+session. This should be set before the dialogue is begun. Flags doesn't have
+any meaning at the moment.
+Returns: 0 for success
+
+
+int libsmtp_free (struct libsmtp_session_struct *data)
+
+Use this to free the session structure. You should do this to clean up
+memory usage. Maybe it is best to register this with atexit somehow.
+
+
+
+MIME SETUP
+==========
+
+If you don't set any MIME settings, libsmtp will presume that you want to
+send 7bit US-ASCII text only data. If this is not the case, you should
+configure the session with the MIME functions. Please see the file MIME for
+more information on this.
+
+WARNING: If you want to encode in base64, please note that the data to the
+part_send function has to be sent in a buffer the size of a multiple of 3,
+e.g. 300 bytes strings. This is a shortcoming of the encoding algorithm.
+
+
+
+SMTP CONNECTION
+===============
+
+After initial setup is done for a session, you can run the actual SMTP
+connection with the following commands.
+
+int libsmtp_connect (char *server, unsigned int port,
+           unsigned int flags, struct libsmtp_session_struct *data)
+
+Use this function to connect to a mailserver. The string server can either
+be a hostname or an IP address. Port can be left at 0, then the default
+SMTP port (25) can be used. Flags should be left at 0 at the moment. The
+libsmtp_session_struct should be initialized beforehand. Please be sure
+to clean up with libsmtp_free. This function fills in the ServerFlags struct
+entry so you can see what the other side is capable of.
+Returns: A libsmtp_errno error code or 0 for success.
+
+
+int libsmtp_dialogue_send (char *line, struct libsmtp_session_struct *data)
+
+If you want to conduct the SMTP dialogue (the data sent before the BODY
+command appears) yourself, or you just want to add something to the dialogue
+after libsmtp handled the main part for you, you can use this function. Send
+one line at a time. The string line will be overwritten with the returned
+string sent by the mailserver minus the response code. This mailserver
+response can be found in data->LastRespone, too (thats a GString tho!!)
+Returns: the numeric SMTP response code.
+
+
+int libsmtp_dialogue (struct libsmtp_session_struct *data)
+
+This function will handle the SMTP dialogue for you. You can fill out the
+structure yourself. The SMTP response minus response code can be read from
+the data->LastResponse string (which is a GString!)
+Returns: the numeric SMTP response code.
+
+
+int libsmtp_header_send (char *line, struct libsmtp_session_struct *data)
+
+This function will let you send out the SMTP headers. Once this function has
+been called, you can't send any more dialogue lines, because the SMTP BODY
+command has been sent. You can use this to send additional headers, too,
+after libsmtp sent out heads with libsmtp_header. Please note that all
+headers sent should be RFC822 compliant, see doc/rfc822.txt.gz for more
+info.
+Returns: 0 if ok, other see libsmtp_errors
+
+
+int libsmtp_body_send_raw (char *line, unsigned long int length, struct libsmtp_session_struct *data)
+
+This function sends one line of body text. Please note that with this
+function you must convert the document into SMTP and MIME conformant data
+yourself. According to RC822, a may have up to 998 characters and should be
+ended with \r\n (CRLF). If you send non US-ASCII data (i.e. 8bit), lines
+must not be longer than 76 characters and be encoded with quoted printable
+or base64 encoding. Please see RFC822 for more information. line points to the
+data to be send, length says how many bytes to send.
+
+
+
+int libsmtp_close (struct libsmtp_session_struct *data)
+
+This will close the SMTP connection. You can use this function any time and
+see in the libsmtp_mail_data function the stats of sent mail.
+
+
+
+ERROR HANDLING
+==============
+
+int libsmtp_errno (struct libsmtp_session_struct *data)
+
+This function returns the internal error code for this session. It can be
+read directly from the session_struct, too.
+
+
+const char *libsmtp_strerr (struct libsmtp_session_struct *data)
+
+If you have an error condition, this function will return the error name,
+otherwise "no error" will be returned.
+
+
+
+Session data is saved in a struct pointer that is passed between all
+functions, so that you can have multiple sessions running at any one time.
+This is the definition of the struct:
+
+struct libsmtp_session_struct {
+  int serverflags;	/* Server capability flags */
+  int socket;		/* socket handle */
+
+  GString *From;	/* From address */
+  GList *To;		/* All recipients addresses */
+  GList *CC;		/* All Carbon Copy recipients addresses */
+  GList *BCC;		/* All Blind Carbon Copy recipients addresses */
+  int NumFailedTo;	/* number of rejected recipients */
+  int NumFailedCC;	/* number of rejected CC recipients */
+  int NumFailedBCC;	/* number of rejected BCC recipients */
+  GList *ToResponse;	/* List of failed recipients containing the response for
+  			   each failure */
+  GList *CCResponse;	/* The same for CC recipients */
+  GList *BCCResponse;	/* And for BCC recipients */
+
+  GString *Subject;	/* Mail subject */
+  GString *LastResponse;	/* Last SMTP response string from server */
+  int LastResponseCode;	/* Last SMTP response code from server */
+  int ErrorCode;	/* Internal libsmtp error code from last error */
+  GString *ErrorModule;	/* Module were error was caused */
+  int Stage;		/* SMTP transfer stage */
+
+  unsigned int DialogueSent;	/* Number of SMTP dialogue lines sent */
+  unsigned int DialogueBytes;	/* Bytes of SMTP dialogue data sent */
+  unsigned int HeadersSent;  	/* Number of header lines sent */
+  unsigned int HeaderBytes;	/* Bytes of header data sent */
+  unsigned long int BodyBytes;	/* Bytes of body data sent */
+};
+
+What are those GStrings doing there? Well, I must say I like the GLib and it
+is to be found on nearly any Linux or FreeBSD system today, widely portable
+to almost any Unix (and Windows - yuck) and small and efficient. I tend to
+use GStrings instead of char * to avoid buffer overflows. Those few CPU
+cycles used for allocation of the mem pools are not worth risking security
+risks, I think.

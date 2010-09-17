@@ -1,0 +1,153 @@
+
+It is now possible to send MIME documents with libsmtp, i. e. non
+US-ASCII mails or binary attachments. Mail MIME types typically are either
+text/plain, text/html or multipart/*, in my experience. I never got a mail
+just consisting of a picture and nothing else :).
+There should be support for the other types, though. I propose the following
+approach:
+
+A MIME message consists of different body parts. I may be that there is only
+one body part (the text message), or many different parts. These parts are
+actually organized in a n-dimensional tree. Here is a small example:
+
+                  main body part
+                  /            \
+                /                \
+              /                    \
+       Small text              forwarded mail consisting of:
+      (greeting)              /             |              \
+                            /               |                \
+                          /                 |                  \
+                     text version      HTML version        attached image
+
+Every message that consists of more than one body part has the multipart
+MIME type as its main body part type.
+The greeting text and the forwarded mail are in no way related, so the main
+body part type is multipart/mixed. The text version and the HTML version of
+the forwarded mail are different representations of identical content,
+making the forwarded mail part a multipart/alternative type (actually mail
+messages within multiparts shouldn't be multiparts at all, but libsmtp can't
+handle this ATM).
+                 
+---------------------------------------
+
+If you want to use the MIME stuff, you'll have to create at least one body
+part before completing the header stage:
+
+struct libsmtp_part_struct *libsmtp_part_new \
+    (struct libsmtp_part_struct *parent_part, int type, int subtype, \
+     int encoding, int charset, char *description, \
+     struct libsmtp_session_struct *session)
+
+Quite a lot of arguments! It returns a pointer to a freshly allocated
+libsmtp_part_struct structure, which points to this part. parent_part should
+point to the parent part (if this is one part of a larger multipart), or
+NULL if this is the main (first) part. Type can be one of:
+
+LIBSMTP_MIME_TEXT, LIBSMTP_MIME_MESSAGE, LIBSMTP_MIME_IMAGE,
+LIBSMTP_MIME_AUDIO, LIBSMTP_MIME_VIDEO, LIBSMTP_MIME_APPLICATION,
+LIBSMTP_MIME_MULTIPART or LIBSMTP_MIME_CUSTOM
+
+The following subtypes are predefined (all are prefixed with
+LIBSMTP_MIME_SUB_):
+
+TEXT SUBTYPES: PLAIN, HTML, ENGLISH, RICHTEXT
+MESSAGE SUBTYPES: RFC822, PARTIAL
+IMAGE SUBTYPES: GIF, JPG, PNG, TIFF, MS-BMP, XBITMAP, XPIXMAP,
+    PORTABLE_ANYMAP, PORTABLE_BITMAP, PORTABLE_GRAYMAP, PORTABLE_PIXMAP
+AUDIO SUBTYPES: MPEG, MIDI, WAV, AIFF
+VIDEO SUBTYPES: MPEG, MSVIDEO, QUICKTIME, FLI
+APPLICATION SUBTYPES: RTF, POSTSCRIPT, PDF, ZIP, DEBIAN-PACKAGE, EXECUTABLE,
+    GTAR, SHELLSCRIPT, TAR
+MULTIPART SUBTYPES: MIXED, PARALLEL, DIGEST, ALTERNATIVE
+OTHER: CUSTOM.
+
+You have to pass an encoding mechanism, too. I implemented Quoted Printable
+(LIBSMTP_ENC_QUOTED) and Base64 encoding (LIBSMTP_ENC_BASE64) for 8bit data.
+If you need to pass 8bit data (i. e. text with Umlauts or a JPEG image), you
+should encode them with one of these. Quoted Printable is ideal for data that
+is mostly 7bit with the occasional 8bit character (like text), Base64 is for
+binary data. You can pass 8bit data without encoding using LIBSMTP_8BIT as
+encoding, but many mail servers don't accept 8bit data (postfix, exim,
+Groupwise 5 just to name a few). If you know your data is only 7bit
+(i. e. US-ASCII character set text), you can use LIBSMTP_ENC_7BIT as encoding.
+
+IMPORTANT: You must pass data that is to be encoded as bas64 in buffers the
+size of multiples of 3, e.g. 300 bytes at once. Once you have passed data
+of a length not a multiple of 3, you cannot append data to this part
+anymore. This is a shortcoming of my base64 encoding algorithm, but
+I don't have a workaround at this moment. You might want to look at the
+multipart.c example to see how this works.
+
+Multipart bodies always have to use LIBSMTP_ENC_7BIT or LIBSMTP_ENC_8BIT. If
+one of the child body parts contains 8bit data, the Multipart has to be 8bit
+too. I entered LIBSMTP_ENC_BINARY too as demanded by RFC2045, but as they
+say there, it isn't used out there very often. It should work, but I
+couldn't test it up to now.
+
+The charsets are equally limited ATM. You only have to set a charset for
+text or message parts. Defining more charsets shouldn't be a problem, it
+just wasn't a priority for me. Here are the currently defined charsets:
+
+LIBSMTP_CHARSET_NOCHARSET (for non-textual parts)
+LIBSMTP_CHARSET_USASCII (7bit data)
+LIBSMTP_CHARSET_ISO8859_1 (western europe, I think. Anyway its what I use)
+LIBSMTP_CHARSET_ISO8859_2 and LIBSMTP_CHARSET_ISO8859_3 (??)
+
+description should be a short description of the part. This isn't used at
+the moment tho. session is the session that this part will be attached to.
+
+---------------------------------
+
+When you specify custom, you have to set the MIME type with:
+
+int libsmtp_body_type_custom (char *type, struct libsmtp_session_struct *session)
+
+and the subtype with
+
+libsmtp_body_subtype_custom (char *subtype, struct libsmtp_session_struct *session)
+
+------------------------------
+
+After the headers have been sent, you should send the MIME headers with
+
+int libsmtp_send_mime_headers (struct libsmtp_session_struct *session)
+
+It returns LIBSMTP_NOERR on success (as usual :) or any other value on
+error.
+
+------------------------------
+
+Now you can send data for one part at a time. As soon as one part is
+finished, no more data can be sent for this part again. Use this function to
+go to the next part (or the first part if you haven't sent any data to any
+part before):
+
+int libsmtp_part_next (struct libsmtp_session_struct *session)
+
+-------------------------------
+
+To query the active part:
+
+struct libsmtp_part_struct *libsmtp_part_query (struct \
+           libsmtp_session_struct *session)
+
+This will return a pointer to the part structure, which can then be read.
+
+-------------------------------
+
+To send data to the client (in a part):
+
+int libsmtp_part_send (char *data, unsigned long int length, struct libsmtp_session_struct *session)
+
+data is the data to be sent. length is the number of characters to send, or
+in other words, the length of *data. I chose this way so that you can send
+purely binary data (containing 0s as data, not end-of-string token). It will
+be formatted according to the encoding method and character set.
+
+-------------------------------
+
+You should look at the source of mimetest and multiparttest for more
+information. The header files contain information about the structure of
+session_struct and part_struct. Please note that multiparts aren't correctly
+closed ATM.

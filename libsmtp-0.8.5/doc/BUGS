@@ -1,0 +1,4 @@
+* error reporting won't report MIME errors ATM
+
+* I wouldn't send 8bit stuff ATM because no transport encoding is
+  implemented right now.

@@ -1,0 +1,22 @@
+
+Thanks to all the nice people who helped me in my struggle with autoconf in
+the time the project was rotting on Berlios. Compilation now takes
+
+./configure
+make
+
+Then, as root:
+make install
+
+This will not install the examples (found in the examples folder). The "testapp"
+application demonstrates the use of libsmtp. You should adjust the mailserver
+address in "testapp.c" otherwise your mail will just be rejected. You can send
+to the addresses that are preconfigured in testapp.c if you like, they are sorted
+by my procmail and get thrown away, so don't worry. If you like, you can set a 
+funny email (or your email address) in the From:-field, and my procmail script
+will save them. Maybe I'll create a gallery someday :)
+
+The mimetest and multiparttest are demo apps for the new MIME stuff in
+libsmtp. They work for me, but might blow your coffee machine against your
+invaluable tea china. Well I never! Please bear in mind that the MIME stuff
+is developmental code.
