@@ -1,165 +1,128 @@
-#include <libasn/lib.h>
+#include <ctype.h>
 #include <rpcd/rpcd_module.h>
-#include <mysql/mysql.h>
+#include "common.h"
 
-/****************************************************/
-/****************** Defines *************************/
-/****************************************************/
+static char *get_query(struct req *req)
+{
+	const char *orig_query;
+	int i;
+	bool inspace = false;
+	xstr *query;
 
-/** Errors */
-#define EDBUSER 1
-#define EDBNAME 2
-#define EDBCONN 3
-#define EDBQUERY 4
-#define EQUERY 5
-#define EINIT 6
+	query = xstr_create("", req);
+	orig_query = uth_char(req->params, "query");
 
-/** Represents request data */
-struct sreq {
+	for (i = 0; orig_query[i]; i++)
+		if (isalpha(orig_query[i]))
+			break;
+
+	for (; orig_query[i]; i++) {
+		switch (orig_query[i]) {
+			case ' ':
+				if (inspace) continue;
+				xstr_append_char(query, orig_query[i]);
+				inspace = true;
+				break;
+			case '\t':
+			case '\r':
+			case '\n':
+				break;
+			default:
+				xstr_append_char(query, orig_query[i]);
+				inspace = false;
+		}
+	}
+
+	return xstr_string(query);
+}
+
+static char *fill_query(struct req *req, char *orig_query, tlist *data)
+{
+	int i, qs;
+	enum fq_state { NORMAL, INQ } state = NORMAL;
+	xstr *query;
 	MYSQL *conn;
-	const char *query;
-	enum reply_format {
-		REPLY_VERBOSE = 1,
-		REPLY_COMPACT
-	} repmode;
+	ut *arg;
 
-	/* XXX: these may be NULL */
-	const char *host;
-	const char *user;
-	const char *pass;
-	const char *db;
-};
+#define iskeyw(a) (sizeof(a) == i - qs && strncmp((a), orig_query + qs + 1, sizeof(a) - 1) == 0)
+	conn = uthp_ptr(req->prv, "sqler", "conn");
+	query = xstr_create("", req);
+	tlist_reset(data);
 
-/** Handle MySQL error, with given code and message string */
-#define sqlerr(code, msg) _sqlerr(code, msg, req, __FILE__, __LINE__)
+	for (i = 0; orig_query[i]; i++) {
+		switch (state) {
+			case NORMAL:
+				if (orig_query[i] == '?') {
+					qs = i;
+					state = INQ;
+				} else {
+					xstr_append_char(query, orig_query[i]);
+				}
+				break;
 
-/****************************************************/
-/**************** Library functions *****************/
-/****************************************************/
+			case INQ:
+				if (orig_query[i] == '?') {
+					arg = tlist_iter(data);
+					if (arg) {
+						if (iskeyw("int")) {
+							xstr_append(query, pb("%d", ut_int(arg)));
+						} else if (iskeyw("str")) {
+							xstr_append(query, pb("\"%s\"", escape(conn, ut_xstr(arg))));
+						} else if (iskeyw("dbl")) {
+							xstr_append(query, pb("%g", ut_double(arg)));
+						} else if (iskeyw("login")) {
+							xstr_append(query, pb("\"%s\"", uthp_char(req->prv, "sqler", "login")));
+						} else if (iskeyw("role")) {
+							xstr_append(query, pb("\"%s\"", uthp_char(req->prv, "sqler", "role")));
+						}
+					}
 
-/** Construct an error reply along with MySQL error message */
-bool _sqlerr(int code, const char *msg, struct req *req,
-	const char *filename, unsigned int linenum)
-{
-	struct sreq *sreq = uth_ptr(req->prv, "sqler.sreq");
+					state = NORMAL;
+				} else if (orig_query[i] < 'a' || orig_query[i] > 'z') {
+rollback:
+					while (qs <= i)
+						xstr_append_char(query, orig_query[qs++]);
+					state = NORMAL;
+				}
+				break;
+		}
+	}
 
-	return err(code, msg,
-		mmatic_printf(req, "MySQL errno %u: %s", mysql_errno(sreq->conn), mysql_error(sreq->conn)));
+	dbg(8, "fill_query: '%s'\n", xstr_string(query));
+
+	return xstr_string(query);
 }
-
-/** Parse db connection params and check if we have a query */
-bool parse_query(struct req *req)
-{
-	struct sreq *sreq = uth_ptr(req->prv, "sqler.sreq");
-	const char *s;
-
-	if ((s = uth_char(req->mod->cfg, "host")))
-		sreq->host = s;
-	else
-		sreq->host = "localhost";
-
-	if ((s = uth_char(req->mod->cfg, "user"))) {
-		sreq->user = s;
-	} else if ((s = uth_char(req->params, "user"))) {
-		if (asn_match("/^[a-z0-9]+$/", s))
-			sreq->user = s;
-		else
-			return err(-EDBUSER, "Invalid characters in database user", s);
-	}
-
-	if ((s = uth_char(req->mod->cfg, "pass"))) {
-		sreq->pass = s;
-	} else if ((s = uth_char(req->params, "pass"))) {
-		sreq->pass = s;
-	}
-
-	if ((s = uth_char(req->mod->cfg, "db"))) {
-		sreq->db = s;
-	} else if ((s = uth_char(req->params, "db"))) {
-		if (asn_match("/^[A-Za-z0-9_-]+$/", s))
-			sreq->db = s;
-		else
-			return err(-EDBNAME, "Invalid characters in database name", s);
-	}
-
-	/* check if we have a query :) */
-	if ((s = uth_char(req->mod->cfg, "query"))) {
-		sreq->query = s;
-	} else if ((s = uth_char(req->params, "query"))) {
-		sreq->query = s;
-	} else {
-		return err(-EDBQUERY, "No SQL query given", NULL);
-	}
-
-	/* check requested reply format */
-	if ((s = uth_char(req->params, "compact")))
-		sreq->repmode = REPLY_COMPACT;
-	else
-		sreq->repmode = REPLY_VERBOSE;
-
-	return true;
-}
-
-/** Open DB connection using user-supplied data */
-bool db_connect(struct req *req)
-{
-	struct sreq *sreq = uth_ptr(req->prv, "sqler.sreq");
-
-	sreq->conn = mysql_init(NULL);
-	if (!sreq->conn)
-		return err(-EINIT, "Initialization of MySQL client library failed", NULL);
-
-	if (!mysql_real_connect(sreq->conn, sreq->host, sreq->user, sreq->pass, sreq->db, 0, NULL, 0)) {
-		dbg(3, "database connection failed\n");
-		return sqlerr(-EDBCONN, "Database connection failed");
-	} else {
-		dbg(3, "connected to database\n");
-	}
-
-	return true;
-}
-
-bool db_disconnect(struct req *req)
-{
-	struct sreq *sreq = uth_ptr(req->prv, "sqler.sreq");
-
-	mysql_close(sreq->conn);
-
-	return true;
-}
-
-/****************************************************/
-/************* Module implementation ****************/
-/****************************************************/
 
 static bool handle(struct req *req)
 {
-	struct sreq *sreq;
+	MYSQL *conn;
+	thash *queries;
+	char *query;
 
-	/******* initialization stuff ********/
+	conn = uthp_ptr(req->prv, "sqler", "conn");
+	queries = uthp_thash(req->prv, "sqler", "queries");
+	asnsert(conn);
 
-	sreq = mmatic_zalloc(sizeof *sreq, req);
-	uth_set_ptr(req->prv, "sqler.sreq", sreq);
-
-	if (!parse_query(req))
-		return false;
-
-	if (!db_connect(req))
-		return false;
+	/******* check the query *******/
+	query = get_query(req);
+	if (!thash_get(queries, query))
+		return err(-EDENY, "Access denied", query);
 
 	/******* make the query ********/
+	MYSQL_RES *res;
 
-	if (mysql_query(sreq->conn, sreq->query) != 0)
+	query = fill_query(req, query, uth_tlist(req->params, "data"));
+
+	if (mysql_query(conn, query) != 0)
 		return sqlerr(-EQUERY, "SQL query failed");
 
 	/* check if we need to fetch anything back */
-	MYSQL_RES *res;
-	res = mysql_store_result(sreq->conn);
+	res = mysql_store_result(conn);
 
 	if (!res) {
 		/* probably an UPDATE, INSERT, etc. - fetch num of affected rows */
-		uth_set_int(req->reply, "affected", mysql_affected_rows(sreq->conn));
-
+		uth_set_int(req->reply, "affected", mysql_affected_rows(conn));
+		mysql_free_result(res);
 		return true; /* we're done */
 	} else {
 		/* a SELECT -- fetch num of rows */
@@ -167,7 +130,6 @@ static bool handle(struct req *req)
 	}
 
 	/******* fetch the results ********/
-
 	MYSQL_FIELD *fields;
 	MYSQL_ROW mrow;
 	ut *row, *rows, *columns;
@@ -177,7 +139,7 @@ static bool handle(struct req *req)
 	fields = mysql_fetch_fields(res);
 	num = mysql_num_fields(res);
 
-	if (sreq->repmode == REPLY_VERBOSE) {
+	if (uth_bool(req->params, "verbose")) {
 		while ((mrow = mysql_fetch_row(res))) {
 			row = utl_add_thash(rows, NULL);
 
@@ -206,12 +168,17 @@ static bool handle(struct req *req)
 		}
 	}
 
-	db_disconnect(req);
-
 	return true;
 }
 
-struct api mysql_api = {
+struct api query_api = {
 	.tag = RPCD_TAG,
 	.handle = handle
+};
+
+struct fw query_fw[] = {
+	{ "query", true, T_STRING, NULL },
+	{ "verbose", false, T_BOOL, NULL },
+	{ "data", false, T_LIST, NULL },
+	NULL,
 };

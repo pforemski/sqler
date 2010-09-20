@@ -3,76 +3,13 @@
 #include <mysql/mysql.h>
 #include "common.h"
 
-#define pm(...) mmatic_printf(mod, __VA_ARGS__)
-#define pr(...) mmatic_printf(req, __VA_ARGS__)
-
-/****************************************************/
-/**************** Library functions *****************/
-/****************************************************/
-
 /** Construct an error reply along with MySQL error message */
 bool _sqlerr(int code, const char *msg, struct req *req, const char *filename, unsigned int linenum)
 {
-	MYSQL *conn = uth_ptr(req->prv, "sqler.conn");
+	MYSQL *conn = uthp_ptr(req->prv, "sqler", "conn");
 	asnsert(conn);
 	return err(code, msg, mmatic_printf(req, "MySQL errno %u: %s", mysql_errno(conn), mysql_error(conn)));
 }
-
-#if 0
-/** Parse db connection params and check if we have a query */
-bool parse_query(struct req *req)
-{
-	struct sreq *sreq = uth_ptr(req->prv, "sqler.sreq");
-	const char *s;
-
-	if ((s = uth_char(req->mod->cfg, "host")))
-		sreq->host = s;
-	else
-		sreq->host = "localhost";
-
-	if ((s = uth_char(req->mod->cfg, "user"))) {
-		sreq->user = s;
-	} else if ((s = uth_char(req->params, "user"))) {
-		if (asn_match("/^[a-z0-9]+$/", s))
-			sreq->user = s;
-		else
-			return err(-EDBUSER, "Invalid characters in database user", s);
-	}
-
-	if ((s = uth_char(req->mod->cfg, "pass"))) {
-		sreq->pass = s;
-	} else if ((s = uth_char(req->params, "pass"))) {
-		sreq->pass = s;
-	}
-
-	if ((s = uth_char(req->mod->cfg, "db"))) {
-		sreq->db = s;
-	} else if ((s = uth_char(req->params, "db"))) {
-		if (asn_match("/^[A-Za-z0-9_-]+$/", s))
-			sreq->db = s;
-		else
-			return err(-EDBNAME, "Invalid characters in database name", s);
-	}
-
-	/* check if we have a query :) */
-	if ((s = uth_char(req->mod->cfg, "query"))) {
-		sreq->query = s;
-	} else if ((s = uth_char(req->params, "query"))) {
-		sreq->query = s;
-	} else {
-		return err(-EDBQUERY, "No SQL query given", NULL);
-	}
-
-	/* check requested reply format */
-	if ((s = uth_char(req->params, "compact")))
-		sreq->repmode = REPLY_COMPACT;
-	else
-		sreq->repmode = REPLY_VERBOSE;
-
-	return true;
-}
-
-#endif
 
 static void scan_file(ut *queries, const char *filepath)
 {
@@ -130,19 +67,35 @@ static void scan_dir(ut *queries, const char *dirpath, const char *ext)
 	}
 }
 
-static bool query(MYSQL *conn, const char *query, const char *msg)
+bool query(MYSQL *conn, const char *query)
 {
-	MYSQL_RES *res;
+	asnsert(conn);
 
-	if (mysql_query(conn, query) != 0) {
-		dbg(0, "%s failed: %s\n", msg, mysql_error(conn));
-		return false;
-	}
+	if (mysql_query(conn, query) != 0)
+		die("query '%s' failed: %s", query, mysql_error(conn));
 
-	res = mysql_use_result(conn);
-	mysql_free_result(res);
-
+	mysql_free_result(mysql_use_result(conn));
 	return true;
+}
+
+MYSQL_RES *query_res(MYSQL *conn, const char *query)
+{
+	asnsert(conn);
+
+	if (mysql_query(conn, query) != 0)
+		die("query '%s' failed: %s", query, mysql_error(conn));
+
+	return mysql_store_result(conn);
+}
+
+char *escape(MYSQL *conn, xstr *arg)
+{
+	char *buf;
+
+	buf = mmatic_alloc(xstr_length(arg) * 2 + 1, arg);
+	mysql_real_escape_string(conn, buf, xstr_string(arg), xstr_length(arg));
+
+	return buf;
 }
 
 /****************************************************/
@@ -151,15 +104,16 @@ static bool query(MYSQL *conn, const char *query, const char *msg)
 
 static bool init(struct mod *mod)
 {
-	const char *dbhost;
-	const char *dbname;
-	thash *dbusers;
-	const char *rolename;
-	ut *dbuser, *scandef;
 	MYSQL *conn;
+	MYSQL_RES *res;
+	MYSQL_ROW row;
+	const char *dbhost, *dbname, *rolename;
+	thash *dbusers;
 	tlist *scan;
 	char *path, *ext, *ast;
-	ut *queries;
+	ut *dbuser, *scandef, *queries, *role, *dirprv, *session;
+
+	dirprv = uth_path_create(mod->dir->prv, "sqler");
 
 	/*
 	 * make connections for each of cfg.dbusers{user,pass,scan}
@@ -181,14 +135,15 @@ static bool init(struct mod *mod)
 		}
 
 		dbg(3, "role %s: connected to database\n", rolename);
-		uth_set_ptr(mod->dir->prv, pm("sqler.common.role.%s.conn", rolename), conn);
+		role = uth_path_create(dirprv, "roles", rolename);
+		uth_set_ptr(role, "conn", conn);
 
 		/*
 		 * scan source code for sql queries
 		 */
 		scan = uth_tlist(dbuser, "scan");
 		if (scan) {
-			queries = uth_set_thash(mod->dir->prv, pm("sqler.common.role.%s.queries", rolename), NULL);
+			queries = uth_set_thash(role, "queries", NULL);
 
 			TLIST_ITER_LOOP(scan, scandef) {
 				/* unconst */
@@ -214,91 +169,76 @@ static bool init(struct mod *mod)
 	}
 
 	/*
-	 * check database, prepare sessions
+	 * prepare database
 	 */
-	conn = uth_ptr(mod->dir->prv, "sqler.common.role.admin.conn");
+	conn = uthp_ptr(dirprv, "roles", "admin", "conn");
 	if (!conn) {
-		dbg(0, "missing MySQL connection for 'admin' role");
+		dbg(0, "missing MySQL connection for 'admin' role\n");
 		return false;
 	}
 
-	/* sqler: describe users -- check if table exists */
-	if (!query(conn, "describe users", "check for 'users' table"))
+	/* create table users -- if not exists */
+	if (!query(conn, SQLER_USERS_TABLE))
 		return false;
 
-	/* sqler: create table sessions -- if not exists */
-	if (!query(conn, SQLER_SESSION, "creation of 'session' table"))
+	/* create table sessions -- if not exists */
+	if (!query(conn, SQLER_SESSIONS_TABLE))
 		return false;
+
+	/* drop old sessions */
+	if (!query(conn, "DELETE FROM sessions WHERE timestamp < UNIX_TIMESTAMP() - 3600 * 24 * 7"))
+		return false;
+
+	/*
+	 * read all sessions
+	 */
+	res = query_res(conn, "SELECT id, login, role FROM sessions");
+	while ((row = mysql_fetch_row(res))) {
+		dbg(5, "loading session '%s': login '%s', role '%s'\n", row[0], row[1], row[2]);
+
+		session = uth_path_create(dirprv, "sessions", row[0]);
+		uth_set_char(session, "login", row[1]);
+		uth_set_char(session, "role", row[2]);
+	}
+	mysql_free_result(res);
 
 	return true;
 }
 
 static bool handle(struct req *req)
 {
+	const char *user_session, *role, *login;
+	ut *dirprv, *reqprv;
+
 	/* skip for "login" */
+	if (streq(req->method, "login"))
+		return true;
 
-	/* find session and set req->sqler.common.conn and .queries */
+	/* check session */
+	user_session = uth_char(req->params, "session");
+	if (!user_session)
+		return err(-ENOSESS, "Session ID required", NULL);
 
-#if 0
-	/******* make the query ********/
+	dirprv = uth_path_create(req->mod->dir->prv, "sqler");
+	role  = uthp_char(dirprv, "sessions", user_session, "role");
+	login = uthp_char(dirprv, "sessions", user_session, "login");
 
-	if (mysql_query(sreq->conn, sreq->query) != 0)
-		return sqlerr(-EQUERY, "SQL query failed");
+	if (!(role && login))
+		return err(-ESESS, "Session not found", user_session);
 
-	/* check if we need to fetch anything back */
-	MYSQL_RES *res;
-	res = mysql_store_result(sreq->conn);
+	/* TODO: update session, make use of timestamp, etc. */
 
-	if (!res) {
-		/* probably an UPDATE, INSERT, etc. - fetch num of affected rows */
-		uth_set_int(req->reply, "affected", mysql_affected_rows(sreq->conn));
+	/* copy to req data */
+	reqprv = uth_path_create(req->prv, "sqler");
 
-		return true; /* we're done */
-	} else {
-		/* a SELECT -- fetch num of rows */
-		uth_set_int(req->reply, "rowcount", mysql_num_rows(res));
-	}
+	uth_set_char(reqprv, "role", role);
+	uth_set_char(reqprv, "login", login);
 
-	/******* fetch the results ********/
+	uth_set_ptr(reqprv, "conn", uthp_ptr(dirprv, "roles", role, "conn"));
+	uth_set_thash(reqprv, "queries", uthp_thash(dirprv, "roles", role, "queries"));
 
-	MYSQL_FIELD *fields;
-	MYSQL_ROW mrow;
-	ut *row, *rows, *columns;
-	unsigned int i, num;
-
-	rows = uth_set_tlist(req->reply, "rows", NULL);
-	fields = mysql_fetch_fields(res);
-	num = mysql_num_fields(res);
-
-	if (sreq->repmode == REPLY_VERBOSE) {
-		while ((mrow = mysql_fetch_row(res))) {
-			row = utl_add_thash(rows, NULL);
-
-			for (i = 0; i < num; i++) {
-				if (mrow[i] == NULL)
-					uth_set_null(row, fields[i].name);
-				else
-					uth_set_char(row, fields[i].name, mrow[i]);
-			}
-		}
-	} else {
-		ut *columns = uth_set_tlist(req->reply, "columns", NULL);
-
-		for (i = 0; i < num; i++)
-			utl_add_char(columns, fields[i].name);
-
-		while ((mrow = mysql_fetch_row(res))) {
-			row = utl_add_tlist(rows, NULL);
-
-			for (i = 0; i < num; i++) {
-				if (mrow[i] == NULL)
-					utl_add_null(row);
-				else
-					utl_add_char(row, mrow[i]);
-			}
-		}
-	}
-#endif
+	if (!uth_get(reqprv, "conn"))
+		return err(-ECONN, "DB connection not found for given role", role);
 
 	return true;
 }
@@ -307,4 +247,9 @@ struct api common_api = {
 	.tag = RPCD_TAG,
 	.init = init,
 	.handle = handle
+};
+
+struct fw common_fw[] = {
+	{ "session", false, T_STRING, "/^[a-z0-9A-Z]+$/" },
+	NULL,
 };
