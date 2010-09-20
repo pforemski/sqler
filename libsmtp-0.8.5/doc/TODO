@@ -1,9 +1,0 @@
-* Make subtype CUSTOM work with any MIME type
-* Handle 8bit stuff in subject line
-* Include filename in attachments
-* Test it until it breaks
-* Optimize some code parts
-* The number of empty lines at the beginning and end of body parts doesn't
-  seem to be optimal
-* I should try and send some really huge body parts
-* Is message type a Multipart too?
