@@ -30,6 +30,10 @@
 #define EQUERY 4
 #define EDENY 5
 #define ELOGIN 6
+#define EEMAILSESS 7
+#define EEMAILNOSTATUS 8
+#define EEMAILSTATUS 9
+#define EEMAILLIMIT 10
 
 /****************************************************/
 /**************** Library functions *****************/

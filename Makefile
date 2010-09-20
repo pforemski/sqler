@@ -11,7 +11,7 @@ query.so: query.c
 	gcc $(CFLAGS) -lmysqlclient -shared -o query.so query.c
 
 email.so: email.c
-	gcc $(CFLAGS) -shared -o email.so email.c
+	gcc $(CFLAGS) -lesmtp -shared -o email.so email.c
 
 login.so: login.c
 	gcc $(CFLAGS) -shared -o login.so login.c
