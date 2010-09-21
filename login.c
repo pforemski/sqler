@@ -15,6 +15,7 @@ static bool handle(struct req *req)
 	MYSQL_ROW row;
 	xstr *xs;
 	const char *slogin, *spass, *sess;
+	ut *session;
 
 	conn = uthp_ptr(req->mod->dir->prv, "sqler", "roles", "admin", "conn");
 	asnsert(conn);
@@ -36,8 +37,14 @@ static bool handle(struct req *req)
 	sess = asn_b32_enc(xs, req);
 
 	query(conn, pb(
-		"UPDATE sessions SET id=\"%s\", login=\"%s\", role=\"%s\", timestamp=UNIX_TIMESTAMP()",
+		"INSERT INTO sessions SET id=\"%s\", login=\"%s\", role=\"%s\", timestamp=UNIX_TIMESTAMP()",
 		sess, slogin, row[0]));
+
+	session = uth_path_create(req->mod->dir->prv, "sqler", "sessions", sess);
+	uth_set_char(session, "login", slogin);
+	uth_set_char(session, "role", row[0]);
+
+	mysql_free_result(res);
 
 	uth_set_char(req->reply, "session", sess);
 	return true;

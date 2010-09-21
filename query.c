@@ -12,10 +12,16 @@ static char *get_query(struct req *req)
 	query = xstr_create("", req);
 	orig_query = uth_char(req->params, "query");
 
-	for (i = 0; orig_query[i]; i++)
+	i = sizeof SQLER_TAG;
+	if (i > xstr_length(uth_xstr(req->params, "query")))
+		goto end;
+
+	/* skip whitechars */
+	for (; orig_query[i]; i++)
 		if (isalpha(orig_query[i]))
 			break;
 
+	/* replace all whitechars, newlines, etc with single space */
 	for (; orig_query[i]; i++) {
 		switch (orig_query[i]) {
 			case ' ':
@@ -33,6 +39,7 @@ static char *get_query(struct req *req)
 		}
 	}
 
+end:
 	return xstr_string(query);
 }
 
@@ -62,18 +69,26 @@ static char *fill_query(struct req *req, char *orig_query, tlist *data)
 
 			case INQ:
 				if (orig_query[i] == '?') {
-					arg = tlist_iter(data);
-					if (arg) {
-						if (iskeyw("int")) {
-							xstr_append(query, pb("%d", ut_int(arg)));
-						} else if (iskeyw("str")) {
-							xstr_append(query, pb("\"%s\"", escape(conn, ut_xstr(arg))));
-						} else if (iskeyw("dbl")) {
-							xstr_append(query, pb("%g", ut_double(arg)));
-						} else if (iskeyw("login")) {
-							xstr_append(query, pb("\"%s\"", uthp_char(req->prv, "sqler", "login")));
-						} else if (iskeyw("role")) {
-							xstr_append(query, pb("\"%s\"", uthp_char(req->prv, "sqler", "role")));
+					if (iskeyw("login")) {
+						xstr_append(query, pb("\"%s\"", uthp_char(req->prv, "sqler", "login")));
+					} else if (iskeyw("role")) {
+						xstr_append(query, pb("\"%s\"", uthp_char(req->prv, "sqler", "role")));
+					} else { /* probably needs an arg */
+						arg = tlist_iter(data);
+						if (arg) {
+							if (iskeyw("int")) {
+								xstr_append(query, pb("%d", ut_int(arg)));
+							} else if (iskeyw("str")) {
+								xstr_append(query, pb("\"%s\"", escape(conn, ut_xstr(arg))));
+							} else if (iskeyw("dbl")) {
+								xstr_append(query, pb("%g", ut_double(arg)));
+							} else if (iskeyw("login")) {
+								xstr_append(query, pb("\"%s\"", uthp_char(req->prv, "sqler", "login")));
+							} else if (iskeyw("role")) {
+								xstr_append(query, pb("\"%s\"", uthp_char(req->prv, "sqler", "role")));
+							}
+
+							/* XXX: arg eaten by unrecognizible substitution */
 						}
 					}
 
