@@ -108,6 +108,132 @@ rollback:
 	return xstr_string(query);
 }
 
+/****************** SQL query scanner ******************/
+
+static void scan_file(ut *queries, const char *filepath)
+{
+	int i, j;
+	bool inspace = false;
+	char *file, *orig_query;
+	xstr *query;
+
+	file = asn_readfile(filepath, queries);
+	if (!file) {
+		dbg(1, "reading %s failed\n", filepath);
+		return;
+	}
+
+	/* stop on each "SQLER_TAG */
+	while ((file = strstr(file, "\"" SQLER_TAG))) {
+		file += sizeof SQLER_TAG;
+
+		for (i = 0; file[i]; i++) {
+			/* replace \n, \t and ending \ with spaces */
+			if (file[i] == '\n' || file[i] == '\t' ||
+			    (file[i] == '\\' && file[i+1] == '\n')) {
+				file[i] = ' ';
+				continue;
+			}
+
+			if (file[i+1] == '"' && file[i] != '\\') {
+				file[i+1] = '\0';
+				orig_query = asn_trim(file);
+
+				/* replace all whitechars, newlines, etc with single space */
+				query = xstr_create("", queries);
+				for (j = 0; orig_query[j]; j++) {
+					switch (orig_query[j]) {
+						case ' ':
+							if (inspace) continue;
+							xstr_append_char(query, orig_query[j]);
+							inspace = true;
+							break;
+						case '\t':
+						case '\r':
+						case '\n':
+							break;
+						default:
+							xstr_append_char(query, orig_query[j]);
+							inspace = false;
+					}
+				}
+
+				dbg(5, "%s: %s\n", filepath, xstr_string(query));
+				uth_set_char(queries, xstr_string(query), filepath);
+
+				file += i + 2;
+				break;
+			}
+		}
+	}
+}
+
+static void scan_dir(ut *queries, const char *dirpath, const char *ext)
+{
+	tlist *ls;
+	const char *name, *path, *dot;
+
+	ls = asn_ls(dirpath, queries);
+	TLIST_ITER_LOOP(ls, name) {
+		path = mmatic_printf(queries, "%s/%s", dirpath, name);
+
+		if (asn_isdir(path) == 1) {
+			scan_dir(queries, path, ext);
+			continue;
+		}
+
+		dot = strchr(name, '.');
+		if (!dot) continue;
+		if (!streq(dot + 1, ext)) continue;
+
+		scan_file(queries, path);
+	}
+}
+
+/*******************************************************/
+
+static bool init(struct mod *mod)
+{
+	thash *scan;
+	tlist *scanlist;
+	ut *v, *queries, *scandef;
+	const char *rolename;
+	char *path, *ext, *ast;
+
+	/*
+	 * scan source code for sql queries
+	 */
+	scan = uth_thash(mod->cfg, "scan");
+	THASH_ITER_LOOP(scan, rolename, v) {
+		/* create storage point */
+		queries = uth_path_create(mod->dir->prv, "sqler", "roles", rolename, "queries");
+
+		scanlist = ut_tlist(v);
+		TLIST_ITER_LOOP(scanlist, scandef) {
+			/* unconst */
+			path = mmatic_strdup(ut_char(scandef), mod);
+
+			/* get dir path and file extension */
+			ext = NULL;
+			ast = strchr(path, '*');
+			if (ast) {
+				*ast = '\0';
+				if (ast[1] == '.')
+					ext = ast + 2;
+				else
+					ext = ast + 1;
+			}
+
+			if (!ext || !ext[0])
+				ext = SQLER_DEFAULT_EXT;
+
+			scan_dir(queries, path, ext);
+		}
+	}
+
+	return true;
+}
+
 static bool handle(struct req *req)
 {
 	MYSQL *conn;
@@ -188,6 +314,7 @@ static bool handle(struct req *req)
 
 struct api query_api = {
 	.tag = RPCD_TAG,
+	.init = init,
 	.handle = handle
 };
 

@@ -11,62 +11,6 @@ bool _sqlerr(int code, const char *msg, struct req *req, const char *filename, u
 	return err(code, msg, mmatic_printf(req, "MySQL errno %u: %s", mysql_errno(conn), mysql_error(conn)));
 }
 
-static void scan_file(ut *queries, const char *filepath)
-{
-	int i;
-	char *file, *query;
-
-	file = asn_readfile(filepath, queries);
-	if (!file) {
-		dbg(1, "reading %s failed\n", filepath);
-		return;
-	}
-
-	while ((file = strstr(file, "\"" SQLER_TAG))) {
-		file += sizeof SQLER_TAG;
-
-		for (i = 0; file[i]; i++) {
-			if (file[i] == '\n' || file[i] == '\t') {
-				file[i] = ' ';
-				continue;
-			}
-
-			if (file[i] == '"' && file[i-1] != '\\') {
-				file[i] = '\0';
-				query = asn_trim(file);
-
-				dbg(5, "%s: %s\n", filepath, query);
-				uth_set_char(queries, query, filepath);
-
-				file += i + 1;
-				break;
-			}
-		}
-	}
-}
-
-static void scan_dir(ut *queries, const char *dirpath, const char *ext)
-{
-	tlist *ls;
-	const char *name, *path, *dot;
-
-	ls = asn_ls(dirpath, queries);
-	TLIST_ITER_LOOP(ls, name) {
-		path = mmatic_printf(queries, "%s/%s", dirpath, name);
-
-		if (asn_isdir(path) == 1) {
-			scan_dir(queries, path, ext);
-			continue;
-		}
-
-		dot = strchr(name, '.');
-		if (!dot) continue;
-		if (!streq(dot + 1, ext)) continue;
-
-		scan_file(queries, path);
-	}
-}
-
 bool query(MYSQL *conn, const char *query)
 {
 	asnsert(conn);
@@ -108,21 +52,20 @@ static bool init(struct mod *mod)
 	MYSQL_RES *res;
 	MYSQL_ROW row;
 	const char *dbhost, *dbname, *rolename;
-	thash *dbusers;
+	thash *roles;
 	tlist *scan;
-	char *path, *ext, *ast;
-	ut *dbuser, *scandef, *queries, *role, *dirprv, *session;
+	ut *dbuser, *role, *dirprv, *session;
 
 	dirprv = uth_path_create(mod->dir->prv, "sqler");
 
 	/*
-	 * make connections for each of cfg.dbusers{user,pass,scan}
+	 * make connections for each of cfg.roles
 	 */
 	dbhost = uth_char(mod->cfg, "dbhost");
 	dbname = uth_char(mod->cfg, "dbname");
-	dbusers = uth_thash(mod->cfg, "dbusers");
+	roles = uth_thash(mod->cfg, "roles");
 
-	THASH_ITER_LOOP(dbusers, rolename, dbuser) {
+	THASH_ITER_LOOP(roles, rolename, dbuser) {
 		conn = mysql_init(NULL);
 		if (!conn) {
 			dbg(0, "initialization of MySQL client library failed");
@@ -137,35 +80,6 @@ static bool init(struct mod *mod)
 		dbg(3, "role %s: connected to database\n", rolename);
 		role = uth_path_create(dirprv, "roles", rolename);
 		uth_set_ptr(role, "conn", conn);
-
-		/*
-		 * scan source code for sql queries
-		 */
-		scan = uth_tlist(dbuser, "scan");
-		if (scan) {
-			queries = uth_set_thash(role, "queries", NULL);
-
-			TLIST_ITER_LOOP(scan, scandef) {
-				/* unconst */
-				path = mmatic_strdup(ut_char(scandef), mod);
-
-				/* get dir path and file extension */
-				ext = NULL;
-				ast = strchr(path, '*');
-				if (ast) {
-					*ast = '\0';
-					if (ast[1] == '.')
-						ext = ast + 2;
-					else
-						ext = ast + 1;
-				}
-
-				if (!ext || !ext[0])
-					ext = SQLER_DEFAULT_EXT;
-
-				scan_dir(queries, path, ext);
-			}
-		}
 	}
 
 	/*
