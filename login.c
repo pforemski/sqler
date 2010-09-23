@@ -37,7 +37,7 @@ static bool handle(struct req *req)
 	sess = asn_b32_enc(xs, req);
 
 	query(conn, pb(
-		"INSERT INTO sessions SET id=\"%s\", login=\"%s\", role=\"%s\", timestamp=UNIX_TIMESTAMP()",
+		"REPLACE INTO sessions SET id=\"%s\", login=\"%s\", role=\"%s\", timestamp=UNIX_TIMESTAMP()",
 		sess, slogin, row[0]));
 
 	session = uth_path_create(req->mod->dir->prv, "sqler", "sessions", sess);
