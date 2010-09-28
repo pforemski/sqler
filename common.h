@@ -23,6 +23,8 @@
 	"  timestamp int(10) unsigned NOT NULL default '0',"  \
 	"  PRIMARY KEY (id))"
 
+#define SQLER_SESSION_TIMEOUT "3600"
+
 /** Errors */
 #define ESESS 1
 #define ECONN 2

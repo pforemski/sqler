@@ -158,7 +158,7 @@ static void scan_file(ut *queries, const char *filepath)
 					}
 				}
 
-				dbg(5, "%s: %s\n", filepath, xstr_string(query));
+				dbg(10, "%s: %s\n", filepath, xstr_string(query));
 				uth_set_char(queries, xstr_string(query), filepath);
 
 				file += i + 2;
@@ -246,13 +246,14 @@ static bool handle(struct req *req)
 
 	/******* check the query *******/
 	query = get_query(req);
-	if (!thash_get(queries, query))
+	if (queries && !thash_get(queries, query))
 		return err(-EDENY, "Access denied", query);
 
 	/******* make the query ********/
 	MYSQL_RES *res;
 
 	query = fill_query(req, query, uth_tlist(req->params, "data"));
+	dbg(5, "executing: %s\n", query);
 
 	if (mysql_query(conn, query) != 0)
 		return sqlerr(-EQUERY, "SQL query failed");

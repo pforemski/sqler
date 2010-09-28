@@ -49,12 +49,10 @@ char *escape(MYSQL *conn, xstr *arg)
 static bool init(struct mod *mod)
 {
 	MYSQL *conn;
-	MYSQL_RES *res;
-	MYSQL_ROW row;
 	const char *dbhost, *dbname, *rolename;
 	thash *roles;
 	tlist *scan;
-	ut *dbuser, *role, *dirprv, *session;
+	ut *dbuser, *role, *dirprv;
 
 	dirprv = uth_path_create(mod->dir->prv, "sqler");
 
@@ -77,7 +75,7 @@ static bool init(struct mod *mod)
 			return false;
 		}
 
-		dbg(3, "role %s: connected to database\n", rolename);
+		dbg(8, "role %s: connected to database\n", rolename);
 		role = uth_path_create(dirprv, "roles", rolename);
 		uth_set_ptr(role, "conn", conn);
 	}
@@ -100,56 +98,62 @@ static bool init(struct mod *mod)
 		return false;
 
 	/* drop old sessions */
-	if (!query(conn, "DELETE FROM sessions WHERE timestamp < UNIX_TIMESTAMP() - 3600 * 24 * 7"))
+	if (!query(conn, "DELETE FROM sessions WHERE timestamp < UNIX_TIMESTAMP() - " SQLER_SESSION_TIMEOUT))
 		return false;
-
-	/*
-	 * read all sessions
-	 */
-	res = query_res(conn, "SELECT id, login, role FROM sessions");
-	while ((row = mysql_fetch_row(res))) {
-		dbg(5, "loading session '%s': login '%s', role '%s'\n", row[0], row[1], row[2]);
-
-		session = uth_path_create(dirprv, "sessions", row[0]);
-		uth_set_char(session, "login", row[1]);
-		uth_set_char(session, "role", row[2]);
-	}
-	mysql_free_result(res);
 
 	return true;
 }
 
 static bool handle(struct req *req)
 {
-	const char *user_session, *role, *login;
+	const char *session, *role, *login;
 	ut *dirprv, *reqprv;
+	thash *queries;
+	MYSQL *conn;
+	MYSQL_RES *res;
+	MYSQL_ROW row;
 
 	/* skip for "login" */
 	if (streq(req->method, "login"))
 		return true;
 
-	/* check session */
-	user_session = uth_char(req->params, "session");
-	if (!user_session)
+	dirprv = uth_path_create(req->mod->dir->prv, "sqler");
+	reqprv = uth_path_create(req->prv, "sqler");
+	conn = uthp_ptr(dirprv, "roles", "admin", "conn");
+	asnsert(dirprv && reqprv && conn);
+
+	/* session is required for all other methods */
+	session = uth_char(req->params, "session");
+	if (!session)
 		return err(-ENOSESS, "Session ID required", NULL);
 
-	dirprv = uth_path_create(req->mod->dir->prv, "sqler");
-	role  = uthp_char(dirprv, "sessions", user_session, "role");
-	login = uthp_char(dirprv, "sessions", user_session, "login");
+	/* get session login and role */
+	res = query_res(conn, pb(
+		"SELECT login, role FROM sessions \
+		WHERE id='%s' AND timestamp >= UNIX_TIMESTAMP() - " SQLER_SESSION_TIMEOUT " LIMIT 1",
+		session));
 
-	if (!(role && login))
-		return err(-ESESS, "Session not found", user_session);
+	if (!(row = mysql_fetch_row(res))) {
+		mysql_free_result(res);
+		return err(-ESESS, "Session not found", session);
+	}
 
-	/* TODO: update session, make use of timestamp, etc. */
+	login = mmatic_strdup(row[0], req);
+	role = mmatic_strdup(row[1], req);
+	mysql_free_result(res);
+
+	/* update session */
+	query(conn, pb("UPDATE sessions SET timestamp = UNIX_TIMESTAMP() WHERE id='%s'", session));
 
 	/* copy to req data */
-	reqprv = uth_path_create(req->prv, "sqler");
-
 	uth_set_char(reqprv, "role", role);
 	uth_set_char(reqprv, "login", login);
 
 	uth_set_ptr(reqprv, "conn", uthp_ptr(dirprv, "roles", role, "conn"));
-	uth_set_thash(reqprv, "queries", uthp_thash(dirprv, "roles", role, "queries"));
+
+	queries = uthp_thash(dirprv, "roles", role, "queries");
+	if (queries)
+		uth_set_thash(reqprv, "queries", queries);
 
 	if (!uth_get(reqprv, "conn"))
 		return err(-ECONN, "DB connection not found for given role", role);
