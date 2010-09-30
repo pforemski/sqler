@@ -31,7 +31,10 @@ static const char *readmsg_cb(void **buf, int *len, void *arg)
 {
 	struct req *req = arg;
 	ut *prv;
-	int state;
+	int state, i;
+	const char *p;
+	char last;
+	xstr *ret;
 
 	prv = uth_path_create(req->prv, "sqler");
 
@@ -44,8 +47,19 @@ static const char *readmsg_cb(void **buf, int *len, void *arg)
 				*len = 2;
 				return "\r\n";
 			case 1:
-				*len = xstr_length(uth_xstr(req->params, "body"));
-				return uth_char(req->params, "body");
+				ret = xstr_create("", req);
+
+				p = uth_char(req->params, "body");
+				for (i = 0; p[i]; i++) {
+					if (p[i] == '\n' && last != '\r')
+						xstr_append_char(ret, '\r');
+
+					xstr_append_char(ret, p[i]);
+					last = p[i];
+				}
+
+				*len = xstr_length(ret);
+				return xstr_string(ret);
 			default:
 				*len = 0;
 		}
@@ -132,7 +146,7 @@ end:
 
 static bool handle(struct req *req)
 {
-	const char *limit, *login, *at;
+	const char *limit, *role, *at;
 	tlist *unlimit;
 	ut *prv, *v;
 
@@ -141,14 +155,14 @@ static bool handle(struct req *req)
 	/*
 	 * handle "limit-domain"
 	 */
-	login = uth_char(prv, "login");
+	role = uth_char(prv, "role");
 	limit = uth_char(req->mod->cfg, "limit-domain");
 	if (limit) {
 		/* if in "unlimit", allow */
 		unlimit = uth_tlist(req->mod->cfg, "unlimit");
 		TLIST_ITER_LOOP(unlimit, v) {
-			if (streq(login, ut_char(v))) {
-				dbg(1, "user '%s' allowed to send anywhere\n", login);
+			if (streq(role, ut_char(v))) {
+				dbg(8, "role '%s' allowed to send anywhere\n", role);
 				goto auth_ok;
 			}
 		}

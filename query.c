@@ -263,6 +263,7 @@ static bool handle(struct req *req)
 
 	if (!res) {
 		/* probably an UPDATE, INSERT, etc. - fetch num of affected rows */
+		uth_set_int(req->reply, "insert_id", mysql_insert_id(conn));
 		uth_set_int(req->reply, "affected", mysql_affected_rows(conn));
 		mysql_free_result(res);
 		return true; /* we're done */
