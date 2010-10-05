@@ -222,12 +222,14 @@ static bool init(struct mod *mod)
 					ext = ast + 2;
 				else
 					ext = ast + 1;
+
+				if (!ext[0])
+					ext = SQLER_DEFAULT_EXT;
+
+				scan_dir(queries, path, ext);
+			} else {
+				scan_file(queries, path);
 			}
-
-			if (!ext || !ext[0])
-				ext = SQLER_DEFAULT_EXT;
-
-			scan_dir(queries, path, ext);
 		}
 	}
 
