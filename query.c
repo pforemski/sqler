@@ -43,15 +43,34 @@ end:
 	return xstr_string(query);
 }
 
+/* this probably needs a wise rewrite */
 static char *fill_query(struct req *req, char *orig_query, tlist *data)
 {
 	int i, qs;
 	enum fq_state { NORMAL, INQ } state = NORMAL;
 	xstr *query;
 	MYSQL *conn;
-	ut *arg;
+	ut *arg, *el, *el2;
+	tlist *list, *list2;
+	bool atleastone, atleastone2;
 
 #define iskeyw(a) (sizeof(a) == i - qs && strncmp((a), orig_query + qs + 1, sizeof(a) - 1) == 0)
+
+/* XXX: uses list and el */
+#define appendlist(utlist) do {                        \
+	atleastone = false;                                \
+	xstr_append(query, "(");                           \
+	list = ut_tlist(utlist);                           \
+	TLIST_ITER_LOOP(list, el) {                        \
+		if (atleastone)                                \
+			xstr_append_char(query, ',');              \
+		xstr_append(query,                             \
+			pb("\"%s\"", escape(conn, ut_xstr(el))));  \
+		atleastone = true;                             \
+	}                                                  \
+	xstr_append(query, ")");                           \
+} while(0);
+
 	conn = uthp_ptr(req->prv, "sqler", "conn");
 	query = xstr_create("", req);
 	tlist_reset(data);
@@ -86,6 +105,19 @@ static char *fill_query(struct req *req, char *orig_query, tlist *data)
 								xstr_append(query, pb("\"%s\"", uthp_char(req->prv, "sqler", "login")));
 							} else if (iskeyw("role")) {
 								xstr_append(query, pb("\"%s\"", uthp_char(req->prv, "sqler", "role")));
+							} else if (iskeyw("array")) {
+								appendlist(arg);
+							} else if (iskeyw("arrays")) {
+								atleastone2 = false;
+
+								list2 = ut_tlist(arg);
+								TLIST_ITER_LOOP(list2, el2) {
+									if (atleastone2)
+										xstr_append_char(query, ',');
+
+									appendlist(el2);
+									atleastone2 = true;
+								}
 							}
 
 							/* XXX: arg eaten by unrecognizible substitution */
