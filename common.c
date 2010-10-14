@@ -75,6 +75,8 @@ static bool init(struct mod *mod)
 			return false;
 		}
 
+		query(conn, "SET NAMES 'binary'");
+
 		dbg(8, "role %s: connected to database\n", rolename);
 		role = uth_path_create(dirprv, "roles", rolename);
 		uth_set_ptr(role, "conn", conn);
