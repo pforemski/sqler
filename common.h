@@ -1,7 +1,14 @@
+/*
+ * sqler - a JavaScript-MySQL bridge in C
+ *
+ * Copyright (C) 2010 Pawel Foremski <pawel@foremski.pl>
+ * Licensed under GPLv3
+ */
+
 #ifndef _COMMON_H_
 #define _COMMON_H_
 
-#include <libasn/lib.h>
+#include <libpjf/lib.h>
 #include <mysql/mysql.h>
 
 #define SQLER_DEFAULT_EXT "js"

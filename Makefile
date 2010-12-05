@@ -1,4 +1,4 @@
-CFLAGS=-g -fPIC -lasn
+CFLAGS=-g -fPIC -lpjf
 MODULES=common.so query.so email.so login.so
 
 default: all

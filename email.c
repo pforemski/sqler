@@ -1,3 +1,10 @@
+/*
+ * sqler - a JavaScript-MySQL bridge in C
+ *
+ * Copyright (C) 2010 Pawel Foremski <pawel@foremski.pl>
+ * Licensed under GPLv3
+ */
+
 #include <rpcd/rpcd_module.h>
 #include <libesmtp.h>
 #include <auth-client.h>
